@@ -222,6 +222,31 @@ function createTables(db: Database.Database): void {
       sort_order INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS photo_providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      icon TEXT DEFAULT 'Image',
+      enabled INTEGER DEFAULT 0,
+      config TEXT DEFAULT '{}',
+      sort_order INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS photo_provider_fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id TEXT NOT NULL REFERENCES photo_providers(id) ON DELETE CASCADE,
+      field_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      input_type TEXT NOT NULL DEFAULT 'text',
+      placeholder TEXT,
+      required INTEGER DEFAULT 0,
+      secret INTEGER DEFAULT 0,
+      settings_key TEXT,
+      payload_key TEXT,
+      sort_order INTEGER DEFAULT 0,
+      UNIQUE(provider_id, field_key)
+    );
+
     -- Vacay addon tables
     CREATE TABLE IF NOT EXISTS vacay_plans (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

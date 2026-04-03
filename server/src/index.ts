@@ -207,8 +207,71 @@ import { authenticate as addonAuth } from './middleware/auth';
 import {db as addonDb} from './db/database';
 import { Addon } from './types';
 app.get('/api/addons', addonAuth, (req: Request, res: Response) => {
-  const addons = addonDb.prepare('SELECT id, name, type, icon, enabled FROM addons WHERE enabled = 1 ORDER BY sort_order').all() as Pick<Addon, 'id' | 'name' | 'type' | 'icon' | 'enabled'>[];
-  res.json({ addons: addons.map(a => ({ ...a, enabled: !!a.enabled })) });
+  const addons = addonDb.prepare('SELECT id, name, type, icon, enabled, config, sort_order FROM addons WHERE enabled = 1 ORDER BY sort_order').all() as Array<Pick<Addon, 'id' | 'name' | 'type' | 'icon' | 'enabled' | 'config'> & { sort_order: number }>;
+  const photoProviders = addonDb.prepare(`
+    SELECT id, name, description, icon, enabled, config, sort_order
+    FROM photo_providers
+    WHERE enabled = 1
+    ORDER BY sort_order
+  `).all() as Array<{ id: string; name: string; description?: string | null; icon: string; enabled: number; config: string; sort_order: number }>;
+  const providerIds = photoProviders.map(p => p.id);
+  const providerFields = providerIds.length > 0
+    ? addonDb.prepare(`
+      SELECT provider_id, field_key, label, input_type, placeholder, required, secret, settings_key, payload_key, sort_order
+      FROM photo_provider_fields
+      WHERE provider_id IN (${providerIds.map(() => '?').join(',')})
+      ORDER BY sort_order, id
+    `).all(...providerIds) as Array<{
+      provider_id: string;
+      field_key: string;
+      label: string;
+      input_type: string;
+      placeholder?: string | null;
+      required: number;
+      secret: number;
+      settings_key?: string | null;
+      payload_key?: string | null;
+      sort_order: number;
+    }>
+    : [];
+  const fieldsByProvider = new Map<string, typeof providerFields>();
+  for (const field of providerFields) {
+    const arr = fieldsByProvider.get(field.provider_id) || [];
+    arr.push(field);
+    fieldsByProvider.set(field.provider_id, arr);
+  }
+
+  const combined = [
+    ...addons,
+    ...photoProviders.map(p => ({
+      id: p.id,
+      name: p.name,
+      type: 'photo_provider',
+      icon: p.icon,
+      enabled: p.enabled,
+      config: p.config,
+      fields: (fieldsByProvider.get(p.id) || []).map(f => ({
+        key: f.field_key,
+        label: f.label,
+        input_type: f.input_type,
+        placeholder: f.placeholder || '',
+        required: !!f.required,
+        secret: !!f.secret,
+        settings_key: f.settings_key || null,
+        payload_key: f.payload_key || null,
+        sort_order: f.sort_order,
+      })),
+      sort_order: p.sort_order,
+    })),
+  ].sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id));
+
+  res.json({
+    addons: combined.map(a => ({
+      ...a,
+      enabled: !!a.enabled,
+      config: JSON.parse(a.config || '{}'),
+    })),
+  });
 });
 
 // Addon routes
@@ -218,6 +281,8 @@ import atlasRoutes from './routes/atlas';
 app.use('/api/addons/atlas', atlasRoutes);
 import immichRoutes from './routes/immich';
 app.use('/api/integrations/immich', immichRoutes);
+import memoriesRoutes from './routes/memories';
+app.use('/api/integrations/memories', memoriesRoutes);
 
 app.use('/api/maps', mapsRoutes);
 app.use('/api/weather', weatherRoutes);

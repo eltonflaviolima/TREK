@@ -1,27 +1,36 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Camera, Plus, Share2, EyeOff, Eye, X, Check, Search, ArrowUpDown, MapPin, Filter, Link2, RefreshCw, Unlink, FolderOpen } from 'lucide-react'
-import apiClient from '../../api/client'
+import apiClient, { addonsApi } from '../../api/client'
 import { useAuthStore } from '../../store/authStore'
 import { useTranslation } from '../../i18n'
 import { getAuthUrl } from '../../api/authUrl'
 import { useToast } from '../shared/Toast'
 
-function ImmichImg({ baseUrl, style, loading }: { baseUrl: string; style?: React.CSSProperties; loading?: 'lazy' | 'eager' }) {
+interface PhotoProvider {
+  id: string
+  name: string
+  icon?: string
+  config?: Record<string, unknown>
+}
+
+function ProviderImg({ baseUrl, provider, style, loading }: { baseUrl: string; provider: string; style?: React.CSSProperties; loading?: 'lazy' | 'eager' }) {
   const [src, setSrc] = useState('')
   useEffect(() => {
-    getAuthUrl(baseUrl, 'immich').then(setSrc)
-  }, [baseUrl])
+    getAuthUrl(baseUrl, provider).then(setSrc).catch(() => {})
+  }, [baseUrl, provider])
   return src ? <img src={src} alt="" loading={loading} style={style} /> : null
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
 interface TripPhoto {
-  immich_asset_id: string
+  asset_id: string
+  provider: string
   user_id: number
   username: string
   shared: number
   added_at: string
+  city?: string | null
 }
 
 interface ImmichAsset {
@@ -45,6 +54,8 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
   const currentUser = useAuthStore(s => s.user)
 
   const [connected, setConnected] = useState(false)
+  const [availableProviders, setAvailableProviders] = useState<PhotoProvider[]>([])
+  const [selectedProvider, setSelectedProvider] = useState<string>('')
   const [loading, setLoading] = useState(true)
 
   // Trip photos (saved selections)
@@ -67,49 +78,61 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
   const [showAlbumPicker, setShowAlbumPicker] = useState(false)
   const [albums, setAlbums] = useState<{ id: string; albumName: string; assetCount: number }[]>([])
   const [albumsLoading, setAlbumsLoading] = useState(false)
-  const [albumLinks, setAlbumLinks] = useState<{ id: number; immich_album_id: string; album_name: string; user_id: number; username: string; sync_enabled: number; last_synced_at: string | null }[]>([])
+  const [albumLinks, setAlbumLinks] = useState<{ id: number; provider: string; album_id: string; album_name: string; user_id: number; username: string; sync_enabled: number; last_synced_at: string | null }[]>([])
   const [syncing, setSyncing] = useState<number | null>(null)
+  const pickerIntegrationBase = selectedProvider ? `/integrations/${selectedProvider}` : ''
 
   const loadAlbumLinks = async () => {
     try {
-      const res = await apiClient.get(`/integrations/immich/trips/${tripId}/album-links`)
+      const res = await apiClient.get(`/integrations/memories/trips/${tripId}/album-links`)
       setAlbumLinks(res.data.links || [])
     } catch { setAlbumLinks([]) }
   }
 
-  const openAlbumPicker = async () => {
-    setShowAlbumPicker(true)
+  const loadAlbums = async (provider: string = selectedProvider) => {
+    if (!provider) return
     setAlbumsLoading(true)
     try {
-      const res = await apiClient.get('/integrations/immich/albums')
+      const res = await apiClient.get(`/integrations/${provider}/albums`)
       setAlbums(res.data.albums || [])
-    } catch { setAlbums([]); toast.error(t('memories.error.loadAlbums')) }
-    finally { setAlbumsLoading(false) }
+    } catch {
+      setAlbums([])
+      toast.error(t('memories.error.loadAlbums'))
+    } finally {
+      setAlbumsLoading(false)
+    }
+  }
+
+  const openAlbumPicker = async () => {
+    setShowAlbumPicker(true)
+    await loadAlbums(selectedProvider)
   }
 
   const linkAlbum = async (albumId: string, albumName: string) => {
     try {
-      await apiClient.post(`/integrations/immich/trips/${tripId}/album-links`, { album_id: albumId, album_name: albumName })
+      await apiClient.post(`${pickerIntegrationBase}/trips/${tripId}/album-links`, { album_id: albumId, album_name: albumName })
       setShowAlbumPicker(false)
       await loadAlbumLinks()
       // Auto-sync after linking
-      const linksRes = await apiClient.get(`/integrations/immich/trips/${tripId}/album-links`)
-      const newLink = (linksRes.data.links || []).find((l: any) => l.immich_album_id === albumId)
+      const linksRes = await apiClient.get(`/integrations/memories/trips/${tripId}/album-links`)
+      const newLink = (linksRes.data.links || []).find((l: any) => l.album_id === albumId && l.provider === selectedProvider)
       if (newLink) await syncAlbum(newLink.id)
     } catch { toast.error(t('memories.error.linkAlbum')) }
   }
 
   const unlinkAlbum = async (linkId: number) => {
     try {
-      await apiClient.delete(`/integrations/immich/trips/${tripId}/album-links/${linkId}`)
+      await apiClient.delete(`/integrations/memories/trips/${tripId}/album-links/${linkId}`)
       loadAlbumLinks()
     } catch { toast.error(t('memories.error.unlinkAlbum')) }
   }
 
-  const syncAlbum = async (linkId: number) => {
+  const syncAlbum = async (linkId: number, provider?: string) => {
+    const targetProvider = provider || selectedProvider
+    if (!targetProvider) return
     setSyncing(linkId)
     try {
-      await apiClient.post(`/integrations/immich/trips/${tripId}/album-links/${linkId}/sync`)
+      await apiClient.post(`/integrations/${targetProvider}/trips/${tripId}/album-links/${linkId}/sync`)
       await loadAlbumLinks()
       await loadPhotos()
     } catch { toast.error(t('memories.error.syncAlbum')) }
@@ -138,7 +161,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
 
   const loadPhotos = async () => {
     try {
-      const photosRes = await apiClient.get(`/integrations/immich/trips/${tripId}/photos`)
+      const photosRes = await apiClient.get(`/integrations/memories/trips/${tripId}/photos`)
       setTripPhotos(photosRes.data.photos || [])
     } catch {
       setTripPhotos([])
@@ -148,9 +171,35 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
   const loadInitial = async () => {
     setLoading(true)
     try {
-      const statusRes = await apiClient.get('/integrations/immich/status')
-      setConnected(statusRes.data.connected)
+      const addonsRes = await addonsApi.enabled().catch(() => ({ addons: [] as any[] }))
+      const enabledAddons = addonsRes?.addons || []
+      const photoProviders = enabledAddons.filter((a: any) => a.type === 'photo_provider' && a.enabled)
+
+      // Test connection status for each enabled provider
+      const statusResults = await Promise.all(
+        photoProviders.map(async (provider: any) => {
+          const statusUrl = (provider.config as Record<string, unknown>)?.status_get as string
+          if (!statusUrl) return { provider, connected: false }
+          try {
+            const res = await apiClient.get(statusUrl)
+            return { provider, connected: !!res.data?.connected }
+          } catch {
+            return { provider, connected: false }
+          }
+        })
+      )
+
+      const connectedProviders = statusResults
+        .filter(r => r.connected)
+        .map(r => ({ id: r.provider.id, name: r.provider.name, icon: r.provider.icon, config: r.provider.config }))
+      
+      setAvailableProviders(connectedProviders)
+      setConnected(connectedProviders.length > 0)
+      if (connectedProviders.length > 0 && !selectedProvider) {
+        setSelectedProvider(connectedProviders[0].id)
+      }
     } catch {
+      setAvailableProviders([])
       setConnected(false)
     }
     await loadPhotos()
@@ -170,10 +219,26 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
     await loadPickerPhotos(!!(startDate && endDate))
   }
 
+  useEffect(() => {
+    if (showPicker) {
+      loadPickerPhotos(pickerDateFilter)
+    }
+  }, [selectedProvider])
+
+  useEffect(() => {
+    loadAlbumLinks()
+  }, [tripId])
+
+  useEffect(() => {
+    if (showAlbumPicker) {
+      loadAlbums(selectedProvider)
+    }
+  }, [showAlbumPicker, selectedProvider, tripId])
+
   const loadPickerPhotos = async (useDate: boolean) => {
     setPickerLoading(true)
     try {
-      const res = await apiClient.post('/integrations/immich/search', {
+      const res = await apiClient.post(`${pickerIntegrationBase}/search`, {
         from: useDate && startDate ? startDate : undefined,
         to: useDate && endDate ? endDate : undefined,
       })
@@ -203,7 +268,8 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
   const executeAddPhotos = async () => {
     setShowConfirmShare(false)
     try {
-      await apiClient.post(`/integrations/immich/trips/${tripId}/photos`, {
+      await apiClient.post(`/integrations/memories/trips/${tripId}/photos`, {
+        provider: selectedProvider,
         asset_ids: [...selectedIds],
         shared: true,
       })
@@ -214,28 +280,37 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
 
   // ── Remove photo ──────────────────────────────────────────────────────────
 
-  const removePhoto = async (assetId: string) => {
+  const removePhoto = async (photo: TripPhoto) => {
     try {
-      await apiClient.delete(`/integrations/immich/trips/${tripId}/photos/${assetId}`)
-      setTripPhotos(prev => prev.filter(p => p.immich_asset_id !== assetId))
+      await apiClient.delete(`/integrations/memories/trips/${tripId}/photos`, {
+        data: {
+          asset_id: photo.asset_id,
+          provider: photo.provider,
+        },
+      })
+      setTripPhotos(prev => prev.filter(p => !(p.provider === photo.provider && p.asset_id === photo.asset_id)))
     } catch { toast.error(t('memories.error.removePhoto')) }
   }
 
   // ── Toggle sharing ────────────────────────────────────────────────────────
 
-  const toggleSharing = async (assetId: string, shared: boolean) => {
+  const toggleSharing = async (photo: TripPhoto, shared: boolean) => {
     try {
-      await apiClient.put(`/integrations/immich/trips/${tripId}/photos/${assetId}/sharing`, { shared })
+      await apiClient.put(`/integrations/memories/trips/${tripId}/photos/sharing`, {
+        shared,
+        asset_id: photo.asset_id,
+        provider: photo.provider,
+      })
       setTripPhotos(prev => prev.map(p =>
-        p.immich_asset_id === assetId ? { ...p, shared: shared ? 1 : 0 } : p
+        p.provider === photo.provider && p.asset_id === photo.asset_id ? { ...p, shared: shared ? 1 : 0 } : p
       ))
     } catch { toast.error(t('memories.error.toggleSharing')) }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  const thumbnailBaseUrl = (assetId: string, userId: number) =>
-    `/api/integrations/immich/assets/${assetId}/thumbnail?userId=${userId}`
+  const thumbnailBaseUrl = (photo: TripPhoto) =>
+    `/api/integrations/${photo.provider}/assets/${photo.asset_id}/thumbnail?userId=${photo.user_id}`
 
   const ownPhotos = tripPhotos.filter(p => p.user_id === currentUser?.id)
   const othersPhotos = tripPhotos.filter(p => p.user_id !== currentUser?.id && p.shared)
@@ -286,10 +361,40 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
 
   // ── Photo Picker Modal ────────────────────────────────────────────────────
 
+  const ProviderTabs = () => {
+    if (availableProviders.length < 2) return null
+    return (
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        {availableProviders.map(provider => (
+          <button
+            key={provider.id}
+            onClick={() => setSelectedProvider(provider.id)}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 99,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              border: '1px solid',
+              transition: 'all 0.15s',
+              background: selectedProvider === provider.id ? 'var(--text-primary)' : 'var(--bg-card)',
+              borderColor: selectedProvider === provider.id ? 'var(--text-primary)' : 'var(--border-primary)',
+              color: selectedProvider === provider.id ? 'var(--bg-primary)' : 'var(--text-muted)',
+              textTransform: 'capitalize',
+            }}
+          >
+            {provider.name}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
   // ── Album Picker Modal ──────────────────────────────────────────────────
 
   if (showAlbumPicker) {
-    const linkedIds = new Set(albumLinks.map(l => l.immich_album_id))
+    const linkedIds = new Set(albumLinks.map(l => l.album_id))
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', ...font }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-secondary)' }}>
@@ -297,6 +402,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
             <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
               {t('memories.selectAlbum')}
             </h3>
+            <ProviderTabs />
             <button onClick={() => setShowAlbumPicker(false)}
               style={{ padding: '7px 14px', borderRadius: 10, border: '1px solid var(--border-primary)', background: 'none', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--text-muted)' }}>
               {t('common.cancel')}
@@ -353,7 +459,11 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
   // ── Photo Picker Modal ────────────────────────────────────────────────────
 
   if (showPicker) {
-    const alreadyAdded = new Set(tripPhotos.filter(p => p.user_id === currentUser?.id).map(p => p.immich_asset_id))
+    const alreadyAdded = new Set(
+      tripPhotos
+        .filter(p => p.user_id === currentUser?.id && p.provider === selectedProvider)
+        .map(p => p.asset_id)
+    )
 
     return (
       <>
@@ -364,6 +474,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
             <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
               {t('memories.selectPhotos')}
             </h3>
+            <ProviderTabs />
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={() => setShowPicker(false)}
                 style={{ padding: '7px 14px', borderRadius: 10, border: '1px solid var(--border-primary)', background: 'none', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--text-muted)' }}>
@@ -456,7 +567,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
                           outline: isSelected ? '3px solid var(--text-primary)' : 'none',
                           outlineOffset: -3,
                         }}>
-                        <ImmichImg baseUrl={thumbnailBaseUrl(asset.id, currentUser!.id)} loading="lazy"
+                        <ProviderImg baseUrl={`/api/integrations/${selectedProvider}/assets/${asset.id}/thumbnail?userId=${currentUser!.id}`} provider={selectedProvider} loading="lazy"
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         {isSelected && (
                           <div style={{
@@ -564,7 +675,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
                 <FolderOpen size={11} />
                 <span style={{ fontWeight: 500 }}>{link.album_name}</span>
                 {link.username !== currentUser?.username && <span style={{ color: 'var(--text-faint)' }}>({link.username})</span>}
-                <button onClick={() => syncAlbum(link.id)} disabled={syncing === link.id} title={t('memories.syncAlbum')}
+                <button onClick={() => syncAlbum(link.id, link.provider)} disabled={syncing === link.id} title={t('memories.syncAlbum')}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', color: 'var(--text-faint)' }}>
                   <RefreshCw size={11} style={{ animation: syncing === link.id ? 'spin 1s linear infinite' : 'none' }} />
                 </button>
@@ -630,18 +741,18 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
             {allVisible.map(photo => {
               const isOwn = photo.user_id === currentUser?.id
               return (
-                <div key={photo.immich_asset_id} className="group"
+                <div key={`${photo.provider}:${photo.asset_id}`} className="group"
                   style={{ position: 'relative', aspectRatio: '1', borderRadius: 10, overflow: 'visible', cursor: 'pointer' }}
                   onClick={() => {
-                    setLightboxId(photo.immich_asset_id); setLightboxUserId(photo.user_id); setLightboxInfo(null)
+                    setLightboxId(photo.asset_id); setLightboxUserId(photo.user_id); setLightboxInfo(null)
                     setLightboxOriginalSrc('')
-                    getAuthUrl(`/api/integrations/immich/assets/${photo.immich_asset_id}/original?userId=${photo.user_id}`, 'immich').then(setLightboxOriginalSrc)
+                    getAuthUrl(`/api/integrations/${photo.provider}/assets/${photo.asset_id}/original?userId=${photo.user_id}`, photo.provider).then(setLightboxOriginalSrc).catch(() => {})
                     setLightboxInfoLoading(true)
-                    apiClient.get(`/integrations/immich/assets/${photo.immich_asset_id}/info?userId=${photo.user_id}`)
+                    apiClient.get(`/integrations/${photo.provider}/assets/${photo.asset_id}/info?userId=${photo.user_id}`)
                       .then(r => setLightboxInfo(r.data)).catch(() => {}).finally(() => setLightboxInfoLoading(false))
                   }}>
 
-                  <ImmichImg baseUrl={thumbnailBaseUrl(photo.immich_asset_id, photo.user_id)} loading="lazy"
+                  <ProviderImg baseUrl={thumbnailBaseUrl(photo)} provider={photo.provider} loading="lazy"
                     style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 10 }} />
 
                   {/* Other user's avatar */}
@@ -672,7 +783,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
                   {isOwn && (
                     <div className="opacity-0 group-hover:opacity-100"
                       style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 3, transition: 'opacity 0.15s' }}>
-                      <button onClick={e => { e.stopPropagation(); toggleSharing(photo.immich_asset_id, !photo.shared) }}
+                      <button onClick={e => { e.stopPropagation(); toggleSharing(photo, !photo.shared) }}
                         title={photo.shared ? t('memories.stopSharing') : t('memories.sharePhotos')}
                         style={{
                           width: 26, height: 26, borderRadius: '50%', border: 'none', cursor: 'pointer',
@@ -681,7 +792,7 @@ export default function MemoriesPanel({ tripId, startDate, endDate }: MemoriesPa
                         }}>
                         {photo.shared ? <Eye size={12} color="white" /> : <EyeOff size={12} color="white" />}
                       </button>
-                      <button onClick={e => { e.stopPropagation(); removePhoto(photo.immich_asset_id) }}
+                      <button onClick={e => { e.stopPropagation(); removePhoto(photo) }}
                         style={{
                           width: 26, height: 26, borderRadius: '50%', border: 'none', cursor: 'pointer',
                           background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
