@@ -10,6 +10,7 @@ import { getAllPermissions, savePermissions as savePerms, PERMISSION_ACTIONS } f
 import { revokeUserSessions } from '../mcp';
 import { validatePassword } from './passwordPolicy';
 import { getPhotoProviderConfig } from './memories/helpersService';
+import { send as sendNotification } from './notificationService';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -310,6 +311,28 @@ export async function checkVersion() {
     return { current: currentVersion, latest, update_available, release_url: data.html_url || '', is_docker: isDocker };
   } catch {
     return { current: currentVersion, latest: currentVersion, update_available: false, is_docker: isDocker };
+  }
+}
+
+export async function checkAndNotifyVersion(): Promise<void> {
+  try {
+    const result = await checkVersion();
+    if (!result.update_available) return;
+
+    const lastNotified = (db.prepare('SELECT value FROM app_settings WHERE key = ?').get('last_notified_version') as { value: string } | undefined)?.value;
+    if (lastNotified === result.latest) return;
+
+    db.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)').run('last_notified_version', result.latest);
+
+    await sendNotification({
+      event: 'version_available',
+      actorId: null,
+      scope: 'admin',
+      targetId: 0,
+      params: { version: result.latest as string },
+    });
+  } catch {
+    // Silently ignore — version check is non-critical
   }
 }
 

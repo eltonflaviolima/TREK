@@ -736,6 +736,92 @@ function runMigrations(db: Database.Database): void {
     () => {
       try {db.exec('UPDATE addons SET enabled = 0 WHERE id = memories');} catch (err) {}
     }
+    // Migration 69: Place region cache for sub-national Atlas regions
+    () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS place_regions (
+          place_id INTEGER PRIMARY KEY REFERENCES places(id) ON DELETE CASCADE,
+          country_code TEXT NOT NULL,
+          region_code TEXT NOT NULL,
+          region_name TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_place_regions_country ON place_regions(country_code);
+        CREATE INDEX IF NOT EXISTS idx_place_regions_region ON place_regions(region_code);
+      `);
+    },
+    () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS visited_regions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          region_code TEXT NOT NULL,
+          region_name TEXT NOT NULL,
+          country_code TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, region_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_visited_regions_country ON visited_regions(country_code);
+      `);
+    },
+    // Migration 71: Normalized per-user per-channel notification preferences
+    () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notification_channel_preferences (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY (user_id, event_type, channel)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ncp_user ON notification_channel_preferences(user_id);
+      `);
+
+      // Migrate data from old notification_preferences table (may not exist on fresh installs)
+      const tableExists = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_preferences'").get() as { name: string } | undefined) != null;
+      const oldPrefs: Array<Record<string, number>> = tableExists
+        ? db.prepare('SELECT * FROM notification_preferences').all() as Array<Record<string, number>>
+        : [];
+      const eventCols: Record<string, string> = {
+        trip_invite: 'notify_trip_invite',
+        booking_change: 'notify_booking_change',
+        trip_reminder: 'notify_trip_reminder',
+        vacay_invite: 'notify_vacay_invite',
+        photos_shared: 'notify_photos_shared',
+        collab_message: 'notify_collab_message',
+        packing_tagged: 'notify_packing_tagged',
+      };
+      const insert = db.prepare(
+        'INSERT OR IGNORE INTO notification_channel_preferences (user_id, event_type, channel, enabled) VALUES (?, ?, ?, ?)'
+      );
+      const insertMany = db.transaction((rows: Array<[number, string, string, number]>) => {
+        for (const [userId, eventType, channel, enabled] of rows) {
+          insert.run(userId, eventType, channel, enabled);
+        }
+      });
+
+      for (const row of oldPrefs) {
+        const userId = row.user_id as number;
+        const webhookEnabled = (row.notify_webhook as number) ?? 0;
+        const rows: Array<[number, string, string, number]> = [];
+        for (const [eventType, col] of Object.entries(eventCols)) {
+          const emailEnabled = (row[col] as number) ?? 1;
+          // Only insert if disabled (no row = enabled is our default)
+          if (!emailEnabled) rows.push([userId, eventType, 'email', 0]);
+          if (!webhookEnabled) rows.push([userId, eventType, 'webhook', 0]);
+        }
+        if (rows.length > 0) insertMany(rows);
+      }
+
+      // Copy existing single-channel setting to new plural key
+      db.exec(`
+        INSERT OR IGNORE INTO app_settings (key, value)
+          SELECT 'notification_channels', value FROM app_settings WHERE key = 'notification_channel';
+      `);
+    },
+    // Migration 72: Drop the old notification_preferences table (data migrated to notification_channel_preferences in migration 71)
+    () => {
+      db.exec('DROP TABLE IF EXISTS notification_preferences;');
+    },
   ];
 
   if (currentVersion < migrations.length) {

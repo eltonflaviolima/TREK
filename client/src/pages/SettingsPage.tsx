@@ -1,20 +1,21 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useAuthStore } from '../store/authStore'
-import { useSettingsStore } from '../store/settingsStore'
-import { SUPPORTED_LANGUAGES, useTranslation } from '../i18n'
-import Navbar from '../components/Layout/Navbar'
-import CustomSelect from '../components/shared/CustomSelect'
-import { useToast } from '../components/shared/Toast'
-import { Save, Map, Palette, User, Moon, Sun, Monitor, Shield, Camera, Trash2, Lock, KeyRound, AlertTriangle, Copy, Download, Printer, Terminal, Plus, Check, Info } from 'lucide-react'
-import { authApi, adminApi } from '../api/client'
-import apiClient from '../api/client'
+import React, { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Settings } from 'lucide-react'
+import { useTranslation } from '../i18n'
+import { authApi } from '../api/client'
 import { useAddonStore } from '../store/addonStore'
 import type { LucideIcon } from 'lucide-react'
 import type { UserWithOidc } from '../types'
 import { getApiErrorMessage } from '../types'
 import { MapView } from '../components/Map/MapView'
 import type { Place } from '../types'
+import Navbar from '../components/Layout/Navbar'
+import DisplaySettingsTab from '../components/Settings/DisplaySettingsTab'
+import MapSettingsTab from '../components/Settings/MapSettingsTab'
+import NotificationsTab from '../components/Settings/NotificationsTab'
+import IntegrationsTab from '../components/Settings/IntegrationsTab'
+import AccountTab from '../components/Settings/AccountTab'
+import AboutTab from '../components/Settings/AboutTab'
 
 interface MapPreset {
   name: string
@@ -140,7 +141,7 @@ function NotificationPreferences({ t }: { t: any; memoriesEnabled: boolean }) {
 }
 
 export default function SettingsPage(): React.ReactElement {
-  const { user, updateProfile, uploadAvatar, deleteAvatar, logout, loadUser, demoMode, appRequireMfa } = useAuthStore()
+  const { t } = useTranslation()
   const [searchParams] = useSearchParams()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean | 'blocked'>(false)
   const avatarInputRef = React.useRef<HTMLInputElement>(null)
@@ -150,9 +151,6 @@ export default function SettingsPage(): React.ReactElement {
   const toast = useToast()
   const navigate = useNavigate()
 
-  const [saving, setSaving] = useState<Record<string, boolean>>({})
-
-  // Addon gating (derived from store)
   const memoriesEnabled = addonEnabled('memories')
   const mcpEnabled = addonEnabled('mcp')
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -163,14 +161,12 @@ export default function SettingsPage(): React.ReactElement {
   const [providerValues, setProviderValues] = useState<Record<string, Record<string, string>>>({})
   const [providerConnected, setProviderConnected] = useState<Record<string, boolean>>({})
   const [providerTesting, setProviderTesting] = useState<Record<string, boolean>>({})
-
-  const handleMapClick = useCallback((mapInfo) => {
-    setDefaultLat(mapInfo.latlng.lat)
-    setDefaultLng(mapInfo.latlng.lng)
-  }, [])
+  const hasIntegrations = memoriesEnabled || mcpEnabled
+  const [activeTab, setActiveTab] = useState('display')
 
   useEffect(() => {
     loadAddons()
+    authApi.getAppConfig?.().then(c => setAppVersion(c?.version)).catch(() => {})
   }, [])
   const getProviderConfig = (provider: PhotoProviderAddon): ProviderConfig => {
     const raw = provider.config || {}
@@ -604,16 +600,37 @@ export default function SettingsPage(): React.ReactElement {
     }
   }
 
+  // Auto-switch to account tab when MFA is required
+  useEffect(() => {
+    if (searchParams.get('mfa') === 'required') {
+      setActiveTab('account')
+    }
+  }, [searchParams])
+
+  const TABS = [
+    { id: 'display', label: t('settings.tabs.display') },
+    { id: 'map', label: t('settings.tabs.map') },
+    { id: 'notifications', label: t('settings.tabs.notifications') },
+    ...(hasIntegrations ? [{ id: 'integrations', label: t('settings.tabs.integrations') }] : []),
+    { id: 'account', label: t('settings.tabs.account') },
+    ...(appVersion ? [{ id: 'about', label: t('settings.tabs.about') }] : []),
+  ]
+
   return (
     <div className="min-h-screen" style={{ background: 'var(--bg-secondary)' }}>
       <Navbar />
 
       <div style={{ paddingTop: 'var(--nav-h)' }}>
-        <div className="max-w-5xl mx-auto px-4 py-8">
-          <style>{`@media (max-width: 900px) { .settings-columns { column-count: 1 !important; } }`}</style>
-          <div style={{ marginBottom: 24 }}>
-            <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{t('settings.title')}</h1>
-            <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{t('settings.subtitle')}</p>
+        <div className="max-w-6xl mx-auto px-4 py-8">
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'var(--bg-tertiary)' }}>
+              <Settings className="w-5 h-5" style={{ color: 'var(--text-secondary)' }} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{t('settings.title')}</h1>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{t('settings.subtitle')}</p>
+            </div>
           </div>
 
           <div className="settings-columns" style={{ columnCount: 2, columnGap: 24 }}>
@@ -1385,147 +1402,30 @@ export default function SettingsPage(): React.ReactElement {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+          {/* Tab bar */}
+          <div className="grid grid-cols-3 sm:flex gap-1 mb-6 rounded-xl p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-primary)' }}>
+            {TABS.map(tab => (
               <button
-                onClick={saveProfile}
-                disabled={saving.profile}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-700 disabled:bg-slate-400"
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors ${
+                  activeTab === tab.id
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
               >
-                {saving.profile ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
-                <span className="hidden sm:inline">{t('settings.saveProfile')}</span>
-                <span className="sm:hidden">{t('common.save')}</span>
+                {tab.label}
               </button>
-              <button
-                onClick={async () => {
-                  if (user?.role === 'admin') {
-                    try {
-                      const data = await adminApi.stats()
-                      const adminUsers = (await adminApi.users()).users.filter((u: { role: string }) => u.role === 'admin')
-                      if (adminUsers.length <= 1) {
-                        setShowDeleteConfirm('blocked')
-                        return
-                      }
-                    } catch {}
-                  }
-                  setShowDeleteConfirm(true)
-                }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors text-red-500 hover:bg-red-50"
-                style={{ border: '1px solid #fecaca' }}
-              >
-                <Trash2 size={14} />
-                <span className="hidden sm:inline">{t('settings.deleteAccount')}</span>
-                <span className="sm:hidden">{t('common.delete')}</span>
-              </button>
-            </div>
-          </Section>
-
-          {appVersion && (
-            <Section title={t('settings.about')} icon={Info}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--bg-tertiary)', borderRadius: 99, padding: '6px 14px' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>TREK</span>
-                  <span style={{ fontSize: 13, color: 'var(--text-faint)' }}>v{appVersion}</span>
-                </div>
-                <a href="https://discord.gg/nSdKaXgN" target="_blank" rel="noopener noreferrer"
-                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 99, background: 'var(--bg-tertiary)', transition: 'background 0.15s' }}
-                  onMouseEnter={e => e.currentTarget.style.background = '#5865F220'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
-                  title="Discord">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--text-faint)"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
-                </a>
-              </div>
-            </Section>
-          )}
-
-          {/* Delete Account Confirmation */}
-          {showDeleteConfirm === 'blocked' && (
-            <div style={{
-              position: 'fixed', inset: 0, zIndex: 9999,
-              background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-            }} onClick={() => setShowDeleteConfirm(false)}>
-              <div style={{
-                background: 'var(--bg-card)', borderRadius: 16, padding: '28px 24px',
-                maxWidth: 400, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-              }} onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Shield size={18} style={{ color: '#d97706' }} />
-                  </div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{t('settings.deleteBlockedTitle')}</h3>
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, margin: '0 0 20px' }}>
-                  {t('settings.deleteBlockedMessage')}
-                </p>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    onClick={() => setShowDeleteConfirm(false)}
-                    style={{
-                      padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 500,
-                      border: '1px solid var(--border-primary)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
-                      cursor: 'pointer', fontFamily: 'inherit',
-                    }}
-                  >
-                    {t('common.ok') || 'OK'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {showDeleteConfirm === true && (
-            <div style={{
-              position: 'fixed', inset: 0, zIndex: 9999,
-              background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-            }} onClick={() => setShowDeleteConfirm(false)}>
-              <div style={{
-                background: 'var(--bg-card)', borderRadius: 16, padding: '28px 24px',
-                maxWidth: 400, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-              }} onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Trash2 size={18} style={{ color: '#ef4444' }} />
-                  </div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{t('settings.deleteAccountTitle')}</h3>
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, margin: '0 0 20px' }}>
-                  {t('settings.deleteAccountWarning')}
-                </p>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                  <button
-                    onClick={() => setShowDeleteConfirm(false)}
-                    style={{
-                      padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 500,
-                      border: '1px solid var(--border-primary)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
-                      cursor: 'pointer', fontFamily: 'inherit',
-                    }}
-                  >
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await authApi.deleteOwnAccount()
-                        logout()
-                        navigate('/login')
-                      } catch (err: unknown) {
-                        toast.error(getApiErrorMessage(err, t('common.error')))
-                        setShowDeleteConfirm(false)
-                      }
-                    }}
-                    style={{
-                      padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-                      border: 'none', background: '#ef4444', color: 'white',
-                      cursor: 'pointer', fontFamily: 'inherit',
-                    }}
-                  >
-                    {t('settings.deleteAccountConfirm')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+            ))}
           </div>
+
+          {/* Tab content */}
+          {activeTab === 'display' && <DisplaySettingsTab />}
+          {activeTab === 'map' && <MapSettingsTab />}
+          {activeTab === 'notifications' && <NotificationsTab />}
+          {activeTab === 'integrations' && hasIntegrations && <IntegrationsTab />}
+          {activeTab === 'account' && <AccountTab />}
+          {activeTab === 'about' && appVersion && <AboutTab appVersion={appVersion} />}
         </div>
       </div>
     </div>
