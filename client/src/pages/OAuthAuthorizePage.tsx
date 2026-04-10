@@ -22,6 +22,7 @@ export default function OAuthAuthorizePage(): React.ReactElement {
   const [validation, setValidation] = useState<ValidateResult | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([])
 
   const params = new URLSearchParams(window.location.search)
   const clientId       = params.get('client_id') || ''
@@ -68,12 +69,14 @@ export default function OAuthAuthorizePage(): React.ReactElement {
       }
 
       if (!result.consentRequired) {
-        // Consent already on record — auto-approve silently
+        // Consent already on record — auto-approve silently with the full validated scope
         setPageState('auto_approving')
-        await submitConsent(true)
+        await submitConsent(true, result.scopes ?? [])
         return
       }
 
+      // Pre-select all scopes the client is requesting — user can deselect
+      setSelectedScopes(result.scopes ?? [])
       setPageState('consent')
     } catch (err: unknown) {
       setPageState('error')
@@ -81,13 +84,14 @@ export default function OAuthAuthorizePage(): React.ReactElement {
     }
   }
 
-  async function submitConsent(approved: boolean) {
+  async function submitConsent(approved: boolean, scopes: string[] = selectedScopes) {
     setSubmitting(true)
     try {
       const result = await oauthApi.authorize({
         client_id: clientId,
         redirect_uri: redirectUri,
-        scope,
+        // When approving, send only the scopes the user selected; deny uses original scope
+        scope: approved ? scopes.join(' ') : scope,
         state,
         code_challenge: codeChallenge,
         code_challenge_method: ccMethod,
@@ -100,6 +104,20 @@ export default function OAuthAuthorizePage(): React.ReactElement {
       setErrorMsg('Authorization failed. Please try again.')
       setSubmitting(false)
     }
+  }
+
+  function toggleScope(s: string) {
+    setSelectedScopes(prev =>
+      prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
+    )
+  }
+
+  function toggleGroup(groupScopes: string[], allSelected: boolean) {
+    setSelectedScopes(prev =>
+      allSelected
+        ? prev.filter(s => !groupScopes.includes(s))
+        : [...new Set([...prev, ...groupScopes])]
+    )
   }
 
   function handleLoginRedirect() {
@@ -198,10 +216,14 @@ export default function OAuthAuthorizePage(): React.ReactElement {
             </p>
             <button
               onClick={() => submitConsent(true)}
-              disabled={submitting}
+              disabled={submitting || selectedScopes.length === 0}
               className="w-full px-4 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-60 transition-opacity"
               style={{ background: 'var(--accent-primary, #4f46e5)' }}>
-              {submitting ? 'Authorizing…' : 'Approve Access'}
+              {submitting
+                ? 'Authorizing…'
+                : selectedScopes.length === 0
+                  ? 'Select at least one scope'
+                  : `Approve (${selectedScopes.length} scope${selectedScopes.length !== 1 ? 's' : ''})`}
             </button>
             <button
               onClick={() => submitConsent(false)}
@@ -213,36 +235,63 @@ export default function OAuthAuthorizePage(): React.ReactElement {
           </div>
         </div>
 
-        {/* Right panel — scopes */}
+        {/* Right panel — selectable scopes */}
         <div className="flex-1 px-6 py-8 overflow-y-auto max-h-[80vh] sm:max-h-[600px]">
           <div className="space-y-6">
             {Object.keys(scopesByGroup).length > 0 && (
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide mb-4" style={{ color: 'var(--text-tertiary)' }}>
-                  Permissions requested
+                  Choose which permissions to grant
                 </p>
-                <div className="space-y-5">
-                  {Object.entries(scopesByGroup).map(([group, groupScopes]) => (
-                    <div key={group}>
-                      <p className="text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>{group}</p>
-                      <div className="space-y-1.5">
-                        {groupScopes.map(s => {
-                          const info = SCOPE_GROUPS[s]
-                          return (
-                            <div key={s} className="flex items-start gap-2.5 px-3 py-2 rounded-lg" style={{ background: 'var(--bg-secondary)' }}>
-                              <span className="mt-0.5 text-base leading-none flex-shrink-0">
-                                {s.endsWith(':delete') ? '🗑️' : s.endsWith(':write') ? '✏️' : '👁️'}
-                              </span>
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{info?.label || s}</p>
-                                <p className="text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{info?.description || ''}</p>
-                              </div>
-                            </div>
-                          )
-                        })}
+                <div className="space-y-3">
+                  {Object.entries(scopesByGroup).map(([group, groupScopes]) => {
+                    const allGroupSelected = groupScopes.every(s => selectedScopes.includes(s))
+                    const someGroupSelected = groupScopes.some(s => selectedScopes.includes(s))
+                    return (
+                      <div key={group} className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-primary)' }}>
+                        {/* Group header with select-all toggle */}
+                        <label className="flex items-center gap-2.5 px-3 py-2 cursor-pointer" style={{ background: 'var(--bg-secondary)' }}>
+                          <input
+                            type="checkbox"
+                            checked={allGroupSelected}
+                            ref={el => { if (el) el.indeterminate = someGroupSelected && !allGroupSelected }}
+                            onChange={() => toggleGroup(groupScopes, allGroupSelected)}
+                            className="rounded flex-shrink-0"
+                          />
+                          <span className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{group}</span>
+                          <span className="ml-auto text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                            {groupScopes.filter(s => selectedScopes.includes(s)).length}/{groupScopes.length}
+                          </span>
+                        </label>
+                        {/* Individual scopes */}
+                        <div className="divide-y" style={{ borderColor: 'var(--border-primary)' }}>
+                          {groupScopes.map(s => {
+                            const info = SCOPE_GROUPS[s]
+                            const checked = selectedScopes.includes(s)
+                            return (
+                              <label
+                                key={s}
+                                className="flex items-start gap-2.5 px-3 py-2 cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleScope(s)}
+                                  className="mt-0.5 rounded flex-shrink-0"
+                                />
+                                <span className="mt-0.5 text-base leading-none flex-shrink-0">
+                                  {s.endsWith(':delete') ? '🗑️' : s.endsWith(':write') ? '✏️' : '👁️'}
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{info?.label || s}</p>
+                                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>{info?.description || ''}</p>
+                                </div>
+                              </label>
+                            )
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}
