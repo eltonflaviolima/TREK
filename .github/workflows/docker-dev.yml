@@ -172,7 +172,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          KEEP=5
+          KEEP=20
           VERSION="${{ needs.version-bump.outputs.version }}"
           BASE_VERSION="$(echo "$VERSION" | sed 's/-pre\..*//')"
           git fetch --tags
