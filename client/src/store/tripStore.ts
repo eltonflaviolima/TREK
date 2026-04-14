@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { StoreApi } from 'zustand'
 import { tripsApi, tagsApi, categoriesApi } from '../api/client'
+import { offlineDb } from '../db/offlineDb'
 import { tripRepo } from '../repo/tripRepo'
 import { dayRepo } from '../repo/dayRepo'
 import { placeRepo } from '../repo/placeRepo'
@@ -94,8 +95,12 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
         placeRepo.list(tripId),
         packingRepo.list(tripId),
         todoRepo.list(tripId),
-        tagsApi.list().catch(() => ({ tags: [] })),
-        categoriesApi.list().catch(() => ({ categories: [] })),
+        navigator.onLine
+          ? tagsApi.list().catch(() => offlineDb.tags.toArray().then(tags => ({ tags })))
+          : offlineDb.tags.toArray().then(tags => ({ tags })),
+        navigator.onLine
+          ? categoriesApi.list().catch(() => offlineDb.categories.toArray().then(categories => ({ categories })))
+          : offlineDb.categories.toArray().then(categories => ({ categories })),
       ])
 
       const assignmentsMap: AssignmentsMap = {}

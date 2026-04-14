@@ -10,7 +10,7 @@
  *   - trip list refresh (DashboardPage)
  *   - WS reconnect (phase 7)
  */
-import { tripsApi } from '../api/client'
+import { tripsApi, tagsApi, categoriesApi } from '../api/client'
 import {
   offlineDb,
   upsertTrip,
@@ -21,12 +21,16 @@ import {
   upsertBudgetItems,
   upsertReservations,
   upsertTripFiles,
+  upsertAccommodations,
+  upsertTripMembers,
+  upsertTags,
+  upsertCategories,
   upsertSyncMeta,
   clearTripData,
 } from '../db/offlineDb'
 import { prefetchTilesForTrip } from './tilePrefetcher'
 import { useSettingsStore } from '../store/settingsStore'
-import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile } from '../types'
+import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile, Accommodation, TripMember } from '../types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +43,8 @@ interface TripBundle {
   budgetItems: BudgetItem[]
   reservations: Reservation[]
   files: TripFile[]
+  accommodations: Accommodation[]
+  members: TripMember[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,6 +83,8 @@ async function syncTrip(tripId: number): Promise<void> {
   await upsertBudgetItems(bundle.budgetItems)
   await upsertReservations(bundle.reservations)
   await upsertTripFiles(bundle.files)
+  await upsertAccommodations(bundle.accommodations || [])
+  await upsertTripMembers(tripId, bundle.members || [])
   await upsertSyncMeta({
     tripId,
     lastSyncedAt: Date.now(),
@@ -144,6 +152,10 @@ export const tripSyncManager = {
           console.error(`[tripSync] failed for trip ${trip.id}:`, err)
         }
       }
+
+      // Cache global user data (tags + categories) — fire-and-forget
+      tagsApi.list().then(d => upsertTags(d.tags)).catch(() => {})
+      categoriesApi.list().then(d => upsertCategories(d.categories)).catch(() => {})
 
       // Cache file blobs + map tiles in background (don't block syncAll)
       const tileUrl = useSettingsStore.getState().settings.map_tile_url || undefined

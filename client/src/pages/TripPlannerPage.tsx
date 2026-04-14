@@ -26,6 +26,8 @@ import { useToast } from '../components/shared/Toast'
 import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Ticket, PackageCheck, Wallet, FolderOpen, Users } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import { addonsApi, accommodationsApi, authApi, tripsApi, assignmentsApi, mapsApi } from '../api/client'
+import { accommodationRepo } from '../repo/accommodationRepo'
+import { offlineDb } from '../db/offlineDb'
 import ConfirmDialog from '../components/shared/ConfirmDialog'
 import { useResizablePanels } from '../hooks/useResizablePanels'
 import { useTripWebSocket } from '../hooks/useTripWebSocket'
@@ -104,7 +106,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
 
   const loadAccommodations = useCallback(() => {
     if (tripId) {
-      accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
+      accommodationRepo.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
       tripActions.loadReservations(tripId)
     }
   }, [tripId])
@@ -192,11 +194,16 @@ export default function TripPlannerPage(): React.ReactElement | null {
       tripActions.loadTrip(tripId).catch(() => { toast.error(t('trip.toast.loadError')); navigate('/dashboard') })
       tripActions.loadFiles(tripId)
       loadAccommodations()
-      tripsApi.getMembers(tripId).then(d => {
-        // Combine owner + members into one list
-        const all = [d.owner, ...(d.members || [])].filter(Boolean)
-        setTripMembers(all)
-      }).catch(() => {})
+      if (!navigator.onLine) {
+        offlineDb.tripMembers.where('tripId').equals(Number(tripId)).toArray()
+          .then(rows => setTripMembers(rows))
+          .catch(() => {})
+      } else {
+        tripsApi.getMembers(tripId).then(d => {
+          const all = [d.owner, ...(d.members || [])].filter(Boolean)
+          setTripMembers(all)
+        }).catch(() => {})
+      }
     }
   }, [tripId])
 

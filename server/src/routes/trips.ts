@@ -29,7 +29,7 @@ import {
   ValidationError,
   TRIP_SELECT,
 } from '../services/tripService';
-import { listDays } from '../services/dayService';
+import { listDays, listAccommodations } from '../services/dayService';
 import { listPlaces } from '../services/placeService';
 import { listItems as listPackingItems } from '../services/packingService';
 import { listItems as listTodoItems } from '../services/todoService';
@@ -318,6 +318,9 @@ router.get('/:id/bundle', authenticate, (req: Request, res: Response) => {
   const budgetItems = listBudgetItems(tripId);
   const reservations = listReservations(tripId);
   const files = listFiles(tripId, false);
+  const accommodations = listAccommodations(tripId);
+  const { owner, members } = listMembers(tripId, trip.user_id);
+  const allMembers = [owner, ...(members || [])].filter(Boolean);
 
   res.json({
     trip,
@@ -328,6 +331,8 @@ router.get('/:id/bundle', authenticate, (req: Request, res: Response) => {
     budgetItems,
     reservations,
     files,
+    accommodations,
+    members: allMembers,
   });
 });
 

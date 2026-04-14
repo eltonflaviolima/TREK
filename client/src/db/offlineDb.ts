@@ -1,5 +1,10 @@
 import Dexie, { type Table } from 'dexie';
-import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile } from '../types';
+import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile, Accommodation, TripMember, Tag, Category } from '../types';
+
+/** TripMember enriched with tripId so we can index by trip. */
+export interface CachedTripMember extends TripMember {
+  tripId: number;
+}
 
 // ── Queue + sync types ────────────────────────────────────────────────────────
 
@@ -52,6 +57,10 @@ class TrekOfflineDb extends Dexie {
   budgetItems!: Table<BudgetItem, number>;
   reservations!: Table<Reservation, number>;
   tripFiles!: Table<TripFile, number>;
+  accommodations!: Table<Accommodation, number>;
+  tripMembers!: Table<CachedTripMember, [number, number]>;
+  tags!: Table<Tag, number>;
+  categories!: Table<Category, number>;
   mutationQueue!: Table<QueuedMutation, string>;
   syncMeta!: Table<SyncMeta, number>;
   blobCache!: Table<BlobCacheEntry, string>;
@@ -71,6 +80,13 @@ class TrekOfflineDb extends Dexie {
       mutationQueue:'id, tripId, status, createdAt',
       syncMeta:     'tripId',
       blobCache:    'url, cachedAt',
+    });
+
+    this.version(2).stores({
+      accommodations: 'id, trip_id',
+      tripMembers:    '[tripId+id], tripId',
+      tags:           'id',
+      categories:     'id',
     });
   }
 }
@@ -111,6 +127,23 @@ export async function upsertTripFiles(files: TripFile[]): Promise<void> {
   await offlineDb.tripFiles.bulkPut(files);
 }
 
+export async function upsertAccommodations(items: Accommodation[]): Promise<void> {
+  await offlineDb.accommodations.bulkPut(items);
+}
+
+export async function upsertTripMembers(tripId: number, members: TripMember[]): Promise<void> {
+  const rows: CachedTripMember[] = members.map(m => ({ ...m, tripId }));
+  await offlineDb.tripMembers.bulkPut(rows);
+}
+
+export async function upsertTags(tags: Tag[]): Promise<void> {
+  await offlineDb.tags.bulkPut(tags);
+}
+
+export async function upsertCategories(categories: Category[]): Promise<void> {
+  await offlineDb.categories.bulkPut(categories);
+}
+
 export async function upsertSyncMeta(meta: SyncMeta): Promise<void> {
   await offlineDb.syncMeta.put(meta);
 }
@@ -129,6 +162,8 @@ export async function clearTripData(tripId: number): Promise<void> {
       offlineDb.budgetItems,
       offlineDb.reservations,
       offlineDb.tripFiles,
+      offlineDb.accommodations,
+      offlineDb.tripMembers,
       offlineDb.mutationQueue,
       offlineDb.syncMeta,
     ],
@@ -140,6 +175,8 @@ export async function clearTripData(tripId: number): Promise<void> {
       await offlineDb.budgetItems.where('trip_id').equals(tripId).delete();
       await offlineDb.reservations.where('trip_id').equals(tripId).delete();
       await offlineDb.tripFiles.where('trip_id').equals(tripId).delete();
+      await offlineDb.accommodations.where('trip_id').equals(tripId).delete();
+      await offlineDb.tripMembers.where('tripId').equals(tripId).delete();
       await offlineDb.mutationQueue.where('tripId').equals(tripId).delete();
       await offlineDb.syncMeta.where('tripId').equals(tripId).delete();
     },
