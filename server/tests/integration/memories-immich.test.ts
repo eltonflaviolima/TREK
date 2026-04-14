@@ -119,8 +119,8 @@ vi.mock('../../src/utils/ssrfGuard', async () => {
         body: null,
       });
     }
-    // /api/albums — list albums
-    if (/\/api\/albums$/.test(u)) {
+    // /api/albums — list albums (owned and shared?=true variant)
+    if (/\/api\/albums(\?.*)?$/.test(u)) {
       return Promise.resolve({
         ok: true, status: 200,
         headers: { get: () => null },
@@ -415,9 +415,11 @@ describe('Immich asset proxy', () => {
     const { user: member } = createUser(testDb);
     // Insert a shared photo referencing a trip that doesn't exist (FK disabled temporarily)
     testDb.exec('PRAGMA foreign_keys = OFF');
+    testDb.prepare('INSERT OR IGNORE INTO trek_photos (provider, asset_id, owner_id) VALUES (?, ?, ?)').run('immich', 'asset-notrip', owner.id);
+    const tkpNotrip = testDb.prepare('SELECT id FROM trek_photos WHERE provider = ? AND asset_id = ? AND owner_id = ?').get('immich', 'asset-notrip', owner.id) as any;
     testDb.prepare(
-      'INSERT INTO trip_photos (trip_id, user_id, asset_id, provider, shared) VALUES (?, ?, ?, ?, ?)'
-    ).run(9999, owner.id, 'asset-notrip', 'immich', 1);
+      'INSERT INTO trip_photos (trip_id, user_id, photo_id, shared) VALUES (?, ?, ?, ?)'
+    ).run(9999, owner.id, tkpNotrip.id, 1);
     testDb.exec('PRAGMA foreign_keys = ON');
 
     const res = await request(app)
