@@ -2030,7 +2030,7 @@ function EntryEditor({ entry, journeyId, tripDates, galleryPhotos, onClose, onSa
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-5" style={{ background: 'rgba(9,9,11,0.75)' }}>
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-[0_20px_40px_rgba(0,0,0,0.2)] max-w-[640px] w-full max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-[0_20px_40px_rgba(0,0,0,0.2)] max-w-[640px] w-full max-h-[90vh] flex flex-col overflow-hidden" style={{ paddingBottom: 'var(--bottom-nav-h)' }}>
 
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
           <h2 className="text-[16px] font-bold text-zinc-900 dark:text-white">{entry.id === 0 ? t('journey.detail.newEntry') : t('journey.detail.editEntry')}</h2>

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Info, AlertTriangle, AlertOctagon, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
@@ -69,7 +70,7 @@ function NoticeContent({ notice, title, body, ctaLabel, titleId, bodyId, isDark,
     : DefaultIcon;
 
   return (
-    <div className="flex flex-col relative">
+    <div className="flex flex-col relative flex-1">
       {/* Dismiss X button */}
       {notice.dismissible && (
         <button
@@ -98,7 +99,7 @@ function NoticeContent({ notice, title, body, ctaLabel, titleId, bodyId, isDark,
         </div>
       )}
 
-      <div className="p-8">
+      <div className="px-8 pt-8 pb-0 sm:pb-8 flex flex-col flex-1">
         {/* Severity icon (when no hero) */}
         {!notice.media && (
           <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${SEVERITY_ACCENT[notice.severity] ?? ''}`}>
@@ -179,9 +180,36 @@ function NoticeContent({ notice, title, body, ctaLabel, titleId, bodyId, isDark,
           </ul>
         )}
 
+        {/* CTA + dismiss link */}
+        <div className="flex flex-col items-center gap-3 mt-auto">
+          {ctaLabel ? (
+            <button
+              id={`notice-cta-${notice.id}`}
+              onClick={onCTA}
+              className="w-full h-11 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors"
+            >
+              {ctaLabel}
+            </button>
+          ) : (
+            <button
+              id={`notice-cta-${notice.id}`}
+              onClick={onDismissAll}
+              className="w-full h-11 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors"
+            >
+              {t('common.ok')}
+            </button>
+          )}
+          <button
+            onClick={notice.dismissible && ctaLabel ? onDismiss : undefined}
+            className={`text-sm text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors ${!(notice.dismissible && ctaLabel) ? 'invisible' : ''}`}
+          >
+            Not now
+          </button>
+        </div>
+
         {/* Pager — dots, arrows, counter (only when multiple notices) */}
         {total > 1 && (
-          <div className="flex flex-col items-center gap-1 mb-4">
+          <div className="flex flex-col items-center gap-1 mt-6 mb-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={onPrev}
@@ -224,35 +252,6 @@ function NoticeContent({ notice, title, body, ctaLabel, titleId, bodyId, isDark,
             </span>
           </div>
         )}
-
-        {/* CTA + dismiss link */}
-        <div className="flex flex-col items-center gap-3 mt-2">
-          {ctaLabel ? (
-            <button
-              id={`notice-cta-${notice.id}`}
-              onClick={onCTA}
-              className="w-full h-11 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors"
-            >
-              {ctaLabel}
-            </button>
-          ) : (
-            <button
-              id={`notice-cta-${notice.id}`}
-              onClick={onDismissAll}
-              className="w-full h-11 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors"
-            >
-              {t('common.ok')}
-            </button>
-          )}
-          {notice.dismissible && ctaLabel && (
-            <button
-              onClick={onDismiss}
-              className="text-sm text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
-            >
-              Not now
-            </button>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -283,7 +282,10 @@ export function ModalRenderer({ notices }: Props) {
   // Non-dismissible notices lock the pager so users must act before advancing.
   const canPage = notice?.dismissible !== false;
 
+  const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
+  // 'h' once we classify the gesture as horizontal, 'v' for vertical, null = unclassified
+  const dragLockRef = useRef<'h' | 'v' | null>(null);
   // Keep a ref to the current notice id so dismiss/CTA handlers see the latest value
   const noticeIdRef = useRef<string | null>(null);
   noticeIdRef.current = notice?.id ?? null;
@@ -295,6 +297,13 @@ export function ModalRenderer({ notices }: Props) {
   // contentWrapperRef: the div wrapping NoticeContent — we animate its transform directly.
   const isPageNavRef = useRef(false);
   const slideDirRef  = useRef<'left' | 'right'>('right');
+  // Mobile drag strip — wraps all 3 slots and is translated to reveal prev/current/next
+  const stripRef = useRef<HTMLDivElement>(null);
+  // The sheet element itself — animated on vertical drag-to-dismiss
+  const sheetRef = useRef<HTMLDivElement>(null);
+  // Clip container ref + cached max height — used to pin sheet height to tallest notice
+  const clipRef = useRef<HTMLDivElement>(null);
+  const maxClipHeightRef = useRef(0);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
 
   // Mobile breakpoint
@@ -410,6 +419,19 @@ export function ModalRenderer({ notices }: Props) {
     return () => { document.body.style.overflow = ''; };
   }, [visible, notice]);
 
+  // Pin the strip to the tallest notice height seen so far.
+  // Setting minHeight on the strip (not the clip) forces align-items:stretch to
+  // make every slot exactly that tall, so mt-auto always bottoms out at the same Y.
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+    const el = stripRef.current;
+    if (!el) return;
+    el.style.minHeight = '';
+    const h = el.scrollHeight;
+    if (h > maxClipHeightRef.current) maxClipHeightRef.current = h;
+    el.style.minHeight = `${maxClipHeightRef.current}px`;
+  });
+
   function announceIndex(newIdx: number, total: number) {
     setPageAnnouncement(
       t('system_notice.pager.position')
@@ -451,6 +473,17 @@ export function ModalRenderer({ notices }: Props) {
       const actionCta = notice.cta as { kind: 'action'; labelKey: string; actionId: string; dismissOnAction?: boolean };
       if (actionCta.dismissOnAction !== false) handleDismissAll();
     }
+  }
+
+  function animatedDismissAll() {
+    const sheet = sheetRef.current;
+    if (!sheet || prefersReducedMotion) { handleDismissAll(); return; }
+    sheet.style.transition = 'transform 300ms ease-out';
+    sheet.style.transform = 'translateY(110%)';
+    sheet.addEventListener('transitionend', function onDone() {
+      sheet.removeEventListener('transitionend', onDone);
+      handleDismissAll();
+    }, { once: true });
   }
 
   // Sets up the content wrapper's start transform SYNCHRONOUSLY (before React
@@ -531,6 +564,38 @@ export function ModalRenderer({ notices }: Props) {
       ? (visible ? 'opacity-100' : 'opacity-0')
       : (visible ? 'opacity-100 translate-y-0' : 'opacity-100 translate-y-full');
 
+    // Build ContentProps for an adjacent slot so NoticeContent renders correctly
+    function buildSlotProps(n: SystemNoticeDTO, slotIdx: number): ContentProps {
+      const slotRawBody = t(n.bodyKey);
+      const slotBody = n.bodyParams
+        ? Object.entries(n.bodyParams).reduce(
+            (s, [k, v]) => s.replace(new RegExp(`\\{${k}\\}`, 'g'), v),
+            slotRawBody
+          )
+        : slotRawBody;
+      return {
+        notice: n,
+        title: t(n.titleKey),
+        body: slotBody,
+        ctaLabel: n.cta ? t(n.cta.labelKey) : null,
+        titleId: `notice-title-${n.id}`,
+        bodyId: `notice-body-${n.id}`,
+        isDark,
+        onDismiss: handleDismiss,
+        onDismissAll: handleDismissAll,
+        onCTA: handleCTA,
+        total: notices.length,
+        currentPage: slotIdx,
+        canPage,
+        onPrev: handlePrev,
+        onNext: handleNext,
+        onGoto: handleGoto,
+      };
+    }
+
+    const prevNotice = notices[idx - 1] ?? null;
+    const nextNotice = notices[idx + 1] ?? null;
+
     return (
       <div className="fixed inset-0 z-50" role="presentation">
         {/* Screen-reader page announcements */}
@@ -538,30 +603,136 @@ export function ModalRenderer({ notices }: Props) {
         {/* Backdrop */}
         <div
           className={`absolute inset-0 bg-slate-950/40 backdrop-blur-[2px] transition-opacity ${dur} ${ease} ${visible ? 'opacity-100' : 'opacity-0'}`}
-          onClick={notice.dismissible ? handleDismiss : undefined}
+          onClick={notice.dismissible ? animatedDismissAll : undefined}
         />
         {/* Bottom sheet */}
         <div
+          ref={sheetRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
           aria-describedby={bodyId}
-          className={`absolute bottom-0 left-0 right-0 rounded-t-3xl overflow-hidden max-h-[85dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl transition-all ${dur} ${ease} ${mobileMotion}`}
-          onTouchStart={e => { touchStartY.current = e.touches[0].clientY; }}
-          onTouchEnd={e => {
-            if (touchStartY.current !== null && notice.dismissible) {
-              const delta = e.changedTouches[0].clientY - touchStartY.current;
-              if (delta > 80) handleDismiss();
+          className={`absolute bottom-0 left-0 right-0 rounded-t-3xl overflow-hidden max-h-[85dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl transition-[opacity,transform] ${dur} ${ease} ${mobileMotion}`}
+          style={{ paddingBottom: 'var(--bottom-nav-h)', touchAction: 'pan-y' }}
+          onTouchStart={e => {
+            touchStartX.current = e.touches[0].clientX;
+            touchStartY.current = e.touches[0].clientY;
+            dragLockRef.current = null;
+          }}
+          onTouchMove={e => {
+            if (prefersReducedMotion) return;
+            const startX = touchStartX.current;
+            const startY = touchStartY.current;
+            if (startX === null || startY === null) return;
+            const dx = e.touches[0].clientX - startX;
+            const dy = e.touches[0].clientY - startY;
+            // Classify gesture direction on first significant movement
+            if (!dragLockRef.current) {
+              if (Math.abs(dx) > 8 || Math.abs(dy) > 8)
+                dragLockRef.current = Math.abs(dx) >= Math.abs(dy) ? 'h' : 'v';
+              return;
             }
+            if (dragLockRef.current === 'h') {
+              const strip = stripRef.current;
+              if (!strip) return;
+              strip.style.transition = 'none';
+              // Strip base = -33.333% (center slot visible); dx offsets from there
+              strip.style.transform = `translateX(calc(-33.333% + ${dx}px))`;
+            } else if (dragLockRef.current === 'v' && notice.dismissible) {
+              const sheet = sheetRef.current;
+              if (!sheet || dy <= 0) return;
+              sheet.style.transition = 'none';
+              sheet.style.transform = `translateY(${dy}px)`;
+            }
+          }}
+          onTouchEnd={e => {
+            const startX = touchStartX.current;
+            const startY = touchStartY.current;
+            touchStartX.current = null;
             touchStartY.current = null;
+            const lock = dragLockRef.current;
+            dragLockRef.current = null;
+
+            if (lock === 'h') {
+              if (startX === null) return;
+              const deltaX = e.changedTouches[0].clientX - startX;
+              const strip = stripRef.current;
+              if (!strip) return;
+
+              const goNext = isRtlLanguage(language) ? deltaX > 50 : deltaX < -50;
+              const goPrev = isRtlLanguage(language) ? deltaX < -50 : deltaX > 50;
+              const canGoNext = canPage && idx < notices.length - 1;
+              const canGoPrev = canPage && idx > 0;
+
+              if ((goNext && canGoNext) || (goPrev && canGoPrev)) {
+                // Animate strip to the adjacent slot (-66.666% = next, 0% = prev)
+                strip.style.transition = 'transform 200ms ease-out';
+                strip.style.transform = goNext ? 'translateX(-66.666%)' : 'translateX(0%)';
+                strip.addEventListener('transitionend', function onDone() {
+                  strip.removeEventListener('transitionend', onDone);
+                  strip.style.transition = 'none';
+                  // Render new content into the center slot BEFORE moving the strip,
+                  // so the browser never paints old content at the center position.
+                  const newIdx = goNext ? idx + 1 : idx - 1;
+                  flushSync(() => {
+                    isPageNavRef.current = true;
+                    setIdx(newIdx);
+                    announceIndex(newIdx, notices.length);
+                  });
+                  strip.style.transform = 'translateX(-33.333%)';
+                }, { once: true });
+              } else {
+                // Spring back to center
+                strip.style.transition = 'transform 300ms cubic-bezier(0.34,1.56,0.64,1)';
+                strip.style.transform = 'translateX(-33.333%)';
+                strip.addEventListener('transitionend', function onSnap() {
+                  strip.removeEventListener('transitionend', onSnap);
+                  strip.style.transition = '';
+                  strip.style.transform = 'translateX(-33.333%)';
+                }, { once: true });
+              }
+              return;
+            }
+
+            // Vertical drag — animated dismiss or spring back
+            if (lock === 'v' && startY !== null) {
+              const deltaY = e.changedTouches[0].clientY - startY;
+              const sheet = sheetRef.current;
+              if (deltaY > 80 && notice.dismissible) {
+                animatedDismissAll();
+              } else if (sheet && deltaY > 0) {
+                sheet.style.transition = 'transform 300ms cubic-bezier(0.34,1.56,0.64,1)';
+                sheet.style.transform = 'translateY(0)';
+                sheet.addEventListener('transitionend', function onSnap() {
+                  sheet.removeEventListener('transitionend', onSnap);
+                  sheet.style.transition = '';
+                  sheet.style.transform = '';
+                }, { once: true });
+              }
+            }
           }}
         >
           {/* Drag handle */}
           <div className="pt-3 pb-1 flex justify-center">
             <div className="w-9 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
           </div>
-          <div ref={contentWrapperRef}>
-            <NoticeContent {...contentProps} />
+          {/* Clip container — hides the adjacent slots outside the sheet width */}
+          <div style={{ overflow: 'hidden', width: '100%' }}>
+            {/* 3-slot strip: [prev][current][next] — starts at -33.333% to show current */}
+            <div
+              ref={stripRef}
+              style={{ display: 'flex', width: '300%', alignItems: 'stretch', transform: 'translateX(-33.333%)' }}
+            >
+              <div style={{ width: '33.333%', display: 'flex', flexDirection: 'column' }}>
+                {prevNotice && <NoticeContent {...buildSlotProps(prevNotice, idx - 1)} />}
+              </div>
+              <div ref={contentWrapperRef} style={{ width: '33.333%', display: 'flex', flexDirection: 'column' }}>
+                <NoticeContent {...contentProps} />
+              </div>
+              <div style={{ width: '33.333%', display: 'flex', flexDirection: 'column' }}>
+                {nextNotice && <NoticeContent {...buildSlotProps(nextNotice, idx + 1)} />}
+              </div>
+            </div>
           </div>
         </div>
       </div>
