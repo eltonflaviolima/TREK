@@ -36,6 +36,7 @@ vi.mock('react-leaflet', () => ({
     off: vi.fn(),
     panBy: vi.fn(),
   }),
+  useMapEvents: () => ({}),
 }))
 
 vi.mock('react-leaflet-cluster', () => ({
