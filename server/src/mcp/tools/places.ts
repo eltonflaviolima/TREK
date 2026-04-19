@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
-import { canAccessTrip } from '../../db/database';
+import { canAccessTrip, db } from '../../db/database';
 import { isDemoUser } from '../../services/authService';
 import { deletePlacesMany, importGoogleList, importNaverList, listPlaces, createPlace, updatePlace, deletePlace } from '../../services/placeService';
+import { createAssignment, dayExists } from '../../services/assignmentService';
 import { onPlaceDeleted } from '../../services/journeyService';
 import { listCategories } from '../../services/categoryService';
 import { searchPlaces } from '../../services/mapsService';
@@ -45,6 +46,48 @@ export function registerPlaceTools(server: McpServer, userId: number, scopes: st
       const place = createPlace(String(tripId), { name, description, lat, lng, address, category_id, google_place_id, osm_id, notes, website, phone });
       safeBroadcast(tripId, 'place:created', { place });
       return ok({ place });
+    }
+  );
+
+  if (W) server.registerTool(
+    'create_and_assign_place',
+    {
+      description: 'Create a new place and immediately assign it to a day in one atomic operation. Use place details from search_place results. Only use when the place does not yet exist — if it already exists, use assign_place_to_day directly.',
+      inputSchema: {
+        tripId: z.number().int().positive(),
+        dayId: z.number().int().positive().describe('Day to assign the place to'),
+        name: z.string().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        lat: z.number().optional(),
+        lng: z.number().optional(),
+        address: z.string().max(500).optional(),
+        category_id: z.number().int().positive().optional().describe('Category ID — use list_categories to see available options'),
+        google_place_id: z.string().optional().describe('Google Place ID from search_place — enables opening hours display'),
+        osm_id: z.string().optional().describe('OpenStreetMap ID from search_place (e.g. "way:12345")'),
+        place_notes: z.string().max(2000).optional().describe('Notes for the place'),
+        website: z.string().max(500).optional(),
+        phone: z.string().max(50).optional(),
+        assignment_notes: z.string().max(500).optional().describe('Notes for this day assignment'),
+      },
+      annotations: TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+    },
+    async ({ tripId, dayId, name, description, lat, lng, address, category_id, google_place_id, osm_id, place_notes, website, phone, assignment_notes }) => {
+      if (isDemoUser(userId)) return demoDenied();
+      if (!canAccessTrip(tripId, userId)) return noAccess();
+      if (!dayExists(dayId, tripId)) return { content: [{ type: 'text' as const, text: 'Day not found.' }], isError: true };
+      try {
+        const run = db.transaction(() => {
+          const place = createPlace(String(tripId), { name, description, lat, lng, address, category_id, google_place_id, osm_id, notes: place_notes, website, phone });
+          const assignment = createAssignment(dayId, place.id, assignment_notes ?? null);
+          return { place, assignment };
+        });
+        const result = run();
+        safeBroadcast(tripId, 'place:created', { place: result.place });
+        safeBroadcast(tripId, 'assignment:created', { assignment: result.assignment });
+        return ok(result);
+      } catch {
+        return { content: [{ type: 'text' as const, text: 'Failed to create place and assignment.' }], isError: true };
+      }
     }
   );
 
