@@ -101,7 +101,7 @@ async function fetchPlacePhotos(assignments) {
   await Promise.allSettled(
     toFetch.map(async (place) => {
       try {
-        const data = await mapsApi.placePhoto(place.google_place_id || place.osm_id)
+        const data = await mapsApi.placePhoto(place.google_place_id || place.osm_id, place.lat, place.lng, place.name)
         if (data.photoUrl) photoMap[place.id] = data.photoUrl
       } catch {}
     })
