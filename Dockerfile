@@ -13,11 +13,14 @@ WORKDIR /app
 
 # Timezone support + native deps (better-sqlite3 needs build tools)
 COPY server/package*.json ./
+COPY server/tsconfig.json ./
 RUN apk add --no-cache tzdata dumb-init su-exec python3 make g++ && \
-    npm ci --production && \
+    npm ci && \
     apk del python3 make g++
 
 COPY server/ ./
+RUN npm run build && npm prune --production
+
 COPY --from=client-builder /app/client/dist ./public
 COPY --from=client-builder /app/client/public/fonts ./public/fonts
 
@@ -34,4 +37,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://localhost:3000/api/health || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["sh", "-c", "chown -R node:node /app/data /app/uploads 2>/dev/null || true; exec su-exec node node --import tsx src/index.ts"]
+CMD ["sh", "-c", "chown -R node:node /app/data /app/uploads 2>/dev/null || true; exec su-exec node node dist/index.js"]
